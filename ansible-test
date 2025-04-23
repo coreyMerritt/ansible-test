@@ -1,0 +1,172 @@
+#!/bin/bash
+
+source "$BASH_TEST_ROOT_DIR"
+
+# These are set in bash-test
+! (( ignore_errors )) && set -e
+(( very_verbose )) && set -x
+
+# These should be set as environment vars
+if [[ ! "$AT_ROOT_DIR" ]]; then
+  echo -e "\n\tSet AT_ROOT_DIR"
+  exit 1
+fi
+
+if [[ ! "$AT_ROLES_PATH" ]]; then
+  echo -e "\n\tSet AT_ROLES_PATH"
+  exit 1
+else
+  export ANSIBLE_ROLES_PATH="$AT_ROLES_PATH"
+fi
+
+if [[ ! "$AT_HOST_IP" ]]; then
+  echo -e "\n\tSet AT_HOST_IP"
+  exit 1
+fi
+
+mkdir -p "$AT_ROOT_DIR/inventory" 2>&1>/dev/null
+mkdir -p "$AT_ROOT_DIR/playbooks" 2>&1>/dev/null
+mkdir -p "$AT_ROOT_DIR/vars" 2>&1>/dev/null
+at_inventory_path="$AT_ROOT_DIR/inventory/tmp.yml"
+at_playbook_path="$AT_ROOT_DIR/playbooks/tmp.yml"
+at_vars_path="$AT_ROOT_DIR/vars/tmp.yml"
+
+# Override these
+if [[ "$AT_EXPECT_ROLE_SUCCESS" ]]; then
+  at_expect_role_success=$AT_EXPECT_ROLE_SUCCESS
+else
+  at_expect_role_success=1
+fi
+
+if [[ "$AT_RUN_INCLUDED_TESTS" ]]; then
+  at_run_included_tests=$AT_RUN_INCLUDED_TESTS
+else
+  at_run_included_tests=1
+fi
+
+if [[ "$AT_INCLUDED_TESTS_WAIT_TIME" ]]; then
+  at_included_tests_wait_time=$AT_INCLUDED_TESTS_WAIT_TIME
+else
+  at_included_tests_wait_time=150
+fi
+
+if [[ "$AT_RESET_HOST_BEFORE_TESTS" ]]; then
+  at_reset_host_before_tests=$AT_RESET_HOST_BEFORE_TESTS
+else
+  at_reset_host_before_tests=1
+fi
+
+# User Function
+atSetFoundation() {
+  AT_HOST_IP="$1"
+  at_role="$2"
+  AT_VM_NAME="$3"
+  AT_SNAPSHOT_NAME="$4"
+
+  info "Pointing to host: $AT_HOST_IP..."
+  atLoadHost "$AT_HOST_IP"
+
+  info "Loading role: $at_role..."
+  atLoadRole "$at_role"
+}
+
+# User Function
+atLoadHost() {
+  host_address="$1"
+
+  tee "$at_inventory_path" << EOF
+all:
+  hosts:
+    $host_address:
+EOF
+}
+
+# User Function
+atLoadRole() {
+  at_role="$1"
+
+  tee "$at_playbook_path" << EOF
+- hosts: all
+  become: true
+  roles:
+    - $at_role
+EOF
+}
+
+# User Function
+atRunTest() {
+  if (( muted )); then
+    unmute
+    echo      # This just helps format the output so that its clear which overrides belong to which test
+    mute
+  else
+    echo
+  fi
+  
+  name="$1"
+  
+  if (( at_run_included_tests )); then
+    run_included_tests_if_needed="-e global_run_tests=true -e global_tests_wait_period=$at_included_tests_wait_time"
+  else
+    run_included_tests_if_needed=""
+  fi
+  
+  if (( at_reset_host_before_tests )); then
+    atResetHost
+  fi
+  
+  if [[ "$override_vars" ]]; then
+    info "Overriding variables:\n$override_vars"
+    echo "$override_vars" > "$at_vars_path"
+    extra_vars_if_needed="--extra-vars @$at_vars_path"
+  else
+    rm -rf "$at_vars_path"
+    extra_vars_if_needed=""
+  fi
+
+  if (( at_expect_role_success )); then
+    if [[ "$override_vars" ]]; then
+      at_test_name="$at_role with above overrides... ↑↑↑"
+    else
+      at_test_name="$at_role with defaults..."
+    fi
+  else
+    if [[ "$override_vars" ]]; then
+      at_test_name="$at_role FAILS with above overrides... ↑↑↑"
+    else
+      at_test_name="$at_role FAILS with defaults..."
+    fi
+  fi
+
+  startTest "$at_test_name"
+  if (( at_expect_role_success )); then
+      ansible-playbook -i "$at_inventory_path" \
+        $extra_vars_if_needed \
+        $run_included_tests_if_needed \
+        "$at_playbook_path"
+  else
+      (! ansible-playbook -i "$at_inventory_path" \
+        $extra_vars_if_needed \
+        $run_included_tests_if_needed \
+        "$at_playbook_path")
+  fi
+  endTest
+}
+
+# User Function
+atResetHost() {
+  info "Resetting host..."
+  if [[ "$AT_VM_NAME" ]]; then
+    if [[ "$AT_SNAPSHOT_NAME" ]]; then
+      snapshot --revert "$AT_SNAPSHOT_NAME" "$AT_VM_NAME"
+    else
+      unmute && echo -e "\n\t AT_SNAPSHOT_NAME undefined" && exit 1
+    fi
+  else
+    unmute && echo -e "\n\t AT_VM_NAME undefined" && exit 1
+  fi
+}
+
+atLoadHost "$AT_HOST_IP"
+
+
