@@ -1,10 +1,10 @@
 #!/bin/bash
 
-source "$BASH_TEST_ROOT_DIR"
-
-# These are set in bash-test
+source "$BASH_TEST_PROJECT_DIR/bash-test"
 ! (( ignore_errors )) && set -e
+! (( ignore_errors )) && set -E
 (( very_verbose )) && set -x
+
 
 # These should be set as environment vars
 if [[ ! "$AT_ROOT_DIR" ]]; then
@@ -19,65 +19,145 @@ else
   export ANSIBLE_ROLES_PATH="$AT_ROLES_PATH"
 fi
 
-if [[ ! "$AT_HOST_IP" ]]; then
-  echo -e "\n\tSet AT_HOST_IP"
+if [[ ! "$AT_HOST_ADDRESS" ]]; then
+  echo -e "\n\tSet AT_HOST_ADDRESS"
   exit 1
 fi
 
-mkdir -p "$AT_ROOT_DIR/inventory" 2>&1>/dev/null
-mkdir -p "$AT_ROOT_DIR/playbooks" 2>&1>/dev/null
-mkdir -p "$AT_ROOT_DIR/vars" 2>&1>/dev/null
+if [[ ! "$AT_HOST_SSH_PORT" ]]; then
+  echo -e "\n\tSet AT_HOST_SSH_PORT"
+  exit 1
+fi
+
+if [[ ! "$AT_HOST_USER" ]]; then
+  echo -e "\n\tSet AT_HOST_USER"
+  exit 1
+fi
+
+if [[ ! "$AT_HOST_PASS" ]]; then
+  echo -e "\n\tSet AT_HOST_PASS"
+  exit 1
+fi
+
+
+# Infrastructure definition and setup
 at_inventory_path="$AT_ROOT_DIR/inventory/tmp.yml"
 at_playbook_path="$AT_ROOT_DIR/playbooks/tmp.yml"
 at_vars_path="$AT_ROOT_DIR/vars/tmp.yml"
+mkdir -p "$AT_ROOT_DIR/inventory" 2>&1>/dev/null
+mkdir -p "$AT_ROOT_DIR/playbooks" 2>&1>/dev/null
+mkdir -p "$AT_ROOT_DIR/vars" 2>&1>/dev/null
 
-# Override these
-if [[ "$AT_EXPECT_ROLE_SUCCESS" ]]; then
+
+# Override these in all caps as ENV_VARS or in lowercase as in_file_vars
+if [[ "$at_expect_role_success" ]]; then
+  true
+elif [[ "$AT_EXPECT_ROLE_SUCCESS" ]]; then
   at_expect_role_success=$AT_EXPECT_ROLE_SUCCESS
 else
   at_expect_role_success=1
 fi
 
-if [[ "$AT_RUN_INCLUDED_TESTS" ]]; then
+if [[ "$at_run_included_tests" ]]; then
+  true
+elif [[ "$AT_RUN_INCLUDED_TESTS" ]]; then
   at_run_included_tests=$AT_RUN_INCLUDED_TESTS
 else
   at_run_included_tests=1
 fi
 
-if [[ "$AT_INCLUDED_TESTS_WAIT_TIME" ]]; then
+if [[ "$at_included_tests_wait_time" ]]; then
+  true
+elif [[ "$AT_INCLUDED_TESTS_WAIT_TIME" ]]; then
   at_included_tests_wait_time=$AT_INCLUDED_TESTS_WAIT_TIME
 else
   at_included_tests_wait_time=150
 fi
 
-if [[ "$AT_RESET_HOST_BEFORE_TESTS" ]]; then
+if [[ "$at_reset_host_before_tests" ]]; then
+  true
+elif [[ "$AT_RESET_HOST_BEFORE_TESTS" ]]; then
   at_reset_host_before_tests=$AT_RESET_HOST_BEFORE_TESTS
 else
   at_reset_host_before_tests=1
 fi
 
+if [[ "$at_vm_name" ]]; then
+  true
+elif [[ "$AT_VM_NAME" ]]; then
+  at_vm_name="$AT_VM_NAME"
+else
+  btWarn "AT_VM_NAME is not set -- atResetHost() is not available"
+fi
+
+if [[ "$at_snapshot_name" ]]; then
+  true
+elif [[ "$AT_SNAPSHOT_NAME" ]]; then
+  at_snapshot_name="$AT_SNAPSHOT_NAME"
+else
+  btWarn "AT_SNAPSHOT_NAME is not set -- atResetHost() is not available"
+fi
+
+if [[ "$at_host_address" ]]; then
+  true
+elif [[ "$AT_HOST_ADDRESS" ]]; then
+  at_host_address="$AT_HOST_ADDRESS"
+else
+  echo -e "\n\tSet AT_HOST_ADDRESS"
+  exit 1
+fi
+
+if [[ "$at_host_ssh_port" ]]; then
+  true
+elif [[ "$AT_HOST_SSH_PORT" ]]; then
+  at_host_ssh_port="$AT_HOST_SSH_PORT"
+else
+  echo -e "\n\tSet AT_HOST_SSH_PORT"
+  exit 1
+fi
+
+if [[ "$at_host_user" ]]; then
+  true
+elif [[ "$AT_HOST_USER" ]]; then
+  at_host_user="$AT_HOST_USER"
+else
+  echo -e "\n\tSet AT_HOST_USER"
+  exit 1
+fi
+
+if [[ "$at_host_pass" ]]; then
+  true
+elif [[ "$AT_HOST_PASS" ]]; then
+  at_host_pass="$AT_HOST_PASS"
+else
+  echo -e "\n\tSet AT_HOST_PASS"
+  exit 1
+fi
+
+
 # User Function
 atSetFoundation() {
-  AT_HOST_IP="$1"
+  AT_HOST_ADDRESS="$1"
   at_role="$2"
   AT_VM_NAME="$3"
   AT_SNAPSHOT_NAME="$4"
 
-  info "Pointing to host: $AT_HOST_IP..."
-  atLoadHost "$AT_HOST_IP"
+  btInfo "Pointing to host: $AT_HOST_ADDRESS..."
+  atLoadHost "$AT_HOST_ADDRESS"
 
-  info "Loading role: $at_role..."
+  btInfo "Loading role: $at_role..."
   atLoadRole "$at_role"
 }
 
 # User Function
 atLoadHost() {
-  host_address="$1"
-
   tee "$at_inventory_path" << EOF
 all:
   hosts:
-    $host_address:
+    $at_host_address:
+      ansible_port: $at_host_ssh_port
+      ansible_user: $at_host_user
+      ansible_password: $at_host_pass
 EOF
 }
 
@@ -116,7 +196,7 @@ atRunTest() {
   fi
   
   if [[ "$override_vars" ]]; then
-    info "Overriding variables:\n$override_vars"
+    btInfo "Overriding variables:\n$override_vars"
     echo "$override_vars" > "$at_vars_path"
     extra_vars_if_needed="--extra-vars @$at_vars_path"
   else
@@ -138,35 +218,44 @@ atRunTest() {
     fi
   fi
 
-  startTest "$at_test_name"
+  btStartTest "$at_test_name"
+  rc=0 && ansible-playbook -i "$at_inventory_path" \
+    $extra_vars_if_needed \
+    $run_included_tests_if_needed \
+    "$at_playbook_path" ||\
+      rc=$?
   if (( at_expect_role_success )); then
-      ansible-playbook -i "$at_inventory_path" \
-        $extra_vars_if_needed \
-        $run_included_tests_if_needed \
-        "$at_playbook_path"
+    [[ $rc -eq 0 ]]
   else
-      (! ansible-playbook -i "$at_inventory_path" \
-        $extra_vars_if_needed \
-        $run_included_tests_if_needed \
-        "$at_playbook_path")
+    [[ $rc -ne 0 ]]
   fi
-  endTest
+  btEndTest
 }
 
 # User Function
 atResetHost() {
-  info "Resetting host..."
-  if [[ "$AT_VM_NAME" ]]; then
-    if [[ "$AT_SNAPSHOT_NAME" ]]; then
-      snapshot --revert "$AT_SNAPSHOT_NAME" "$AT_VM_NAME"
+  if [[ ! "$at_vm_name" ]]; then
+    if [[ "$AT_VM_NAME" ]]; then
+      at_vm_name="$AT_VM_NAME"
     else
-      unmute && echo -e "\n\t AT_SNAPSHOT_NAME undefined" && exit 1
+      echo -e "\n\tError: Tried to reset a host without at_vm_name set."
+      echo -e "\t\tSet AT_VM_NAME as an env var, or at_vm_name in the test."
+      exit 1
     fi
-  else
-    unmute && echo -e "\n\t AT_VM_NAME undefined" && exit 1
   fi
+  if [[ ! "$at_snapshot_name" ]]; then
+    if [[ "$AT_SNAPSHOT_NAME" ]]; then
+      at_snapshot_name="$AT_SNAPSHOT_NAME"
+    else
+      echo -e "\n\tError: Tried to reset a host without at_snapshot_name set."
+      echo -e "\t\tSet AT_SNAPSHOT_NAME as an env var, or at_snapshot_name in the test."
+      exit 1
+    fi
+  fi
+
+  btInfo "Resetting host..."
+  snapshot --revert "$at_snapshot_name" "$at_vm_name"
 }
 
-atLoadHost "$AT_HOST_IP"
-
+atLoadHost
 
